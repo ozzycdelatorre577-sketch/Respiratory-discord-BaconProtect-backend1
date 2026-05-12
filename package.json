@@ -1,15 +1,12 @@
 {
-  "name": "baconprotect-backend",
+  "name": "baconprotect",
   "version": "1.0.0",
-  "description": "BaconProtect verification backend",
-  "main": "server.js",
+  "description": "A Discord moderation and protection bot",
+  "main": "index.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node index.js"
   },
   "dependencies": {
-    "cors": "^2.8.5",
-    "express": "^4.18.2",
-    "express-session": "^1.17.3",
-    "node-fetch": "^3.3.2"
+    "discord.js": "^14.0.0"
   }
 }
