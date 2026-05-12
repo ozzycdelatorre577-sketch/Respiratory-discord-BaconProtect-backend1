@@ -6,32 +6,34 @@ const fetch = (...args) => import('node-fetch').then(({default: f}) => f(...args
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// ============================================================
+// CONFIG — fill these in as Railway environment variables!
+// ============================================================
 const CONFIG = {
+    // Discord OAuth
     DISCORD_CLIENT_ID:     process.env.DISCORD_CLIENT_ID,
     DISCORD_CLIENT_SECRET: process.env.DISCORD_CLIENT_SECRET,
-    DISCORD_REDIRECT_URI:  process.env.DISCORD_REDIRECT_URI,
-    BOT_WEBHOOK_URL:       process.env.BOT_WEBHOOK_URL,
+    DISCORD_REDIRECT_URI:  process.env.DISCORD_REDIRECT_URI, // e.g. https://yourbackend.railway.app/auth/discord/callback
+
+    // Your bot webhook (from cloudflared tunnel on Termux)
+    BOT_WEBHOOK_URL:       process.env.BOT_WEBHOOK_URL,      // e.g. https://random.trycloudflare.com/verified
     BOT_SECRET:            process.env.BOT_SECRET || 'baconprotect-secret-2024',
+
+    // Your Discord server ID
     GUILD_ID:              process.env.GUILD_ID,
+
+    // Session secret
     SESSION_SECRET:        process.env.SESSION_SECRET || 'bacon-session-secret',
+
+    // Your Netlify site URL (for CORS)
     FRONTEND_URL:          process.env.FRONTEND_URL || 'https://bacon-verifyrblx.netlify.app',
 };
 
-// CORS
-const allowedOrigins = [
-    'https://bacon-verifyrblx.netlify.app',
-    'http://localhost:3000',
-    'http://localhost:5500',
-];
-
+// ============================================================
+// MIDDLEWARE
+// ============================================================
 app.use(cors({
-    origin: function(origin, callback) {
-        if (!origin || allowedOrigins.includes(origin)) {
-            callback(null, true);
-        } else {
-            callback(new Error('Not allowed by CORS'));
-        }
-    },
+    origin: CONFIG.FRONTEND_URL,
     credentials: true
 }));
 
@@ -44,16 +46,20 @@ app.use(session({
     cookie: {
         secure: true,
         sameSite: 'none',
-        maxAge: 1000 * 60 * 60
+        maxAge: 1000 * 60 * 60 // 1 hour
     }
 }));
 
-// Health check
+// ============================================================
+// HEALTH CHECK
+// ============================================================
 app.get('/', (req, res) => {
     res.json({ status: 'BaconProtect Backend Online 🥓' });
 });
 
-// Discord OAuth Step 1
+// ============================================================
+// DISCORD OAUTH — Step 1: Redirect user to Discord login
+// ============================================================
 app.get('/auth/discord', (req, res) => {
     const params = new URLSearchParams({
         client_id: CONFIG.DISCORD_CLIENT_ID,
@@ -64,12 +70,15 @@ app.get('/auth/discord', (req, res) => {
     res.redirect(`https://discord.com/oauth2/authorize?${params}`);
 });
 
-// Discord OAuth Step 2
+// ============================================================
+// DISCORD OAUTH — Step 2: Discord sends back a code here
+// ============================================================
 app.get('/auth/discord/callback', async (req, res) => {
     const code = req.query.code;
     if (!code) return res.redirect(CONFIG.FRONTEND_URL + '?error=no_code');
 
     try {
+        // Exchange code for token
         const tokenRes = await fetch('https://discord.com/api/oauth2/token', {
             method: 'POST',
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -85,15 +94,18 @@ app.get('/auth/discord/callback', async (req, res) => {
         const tokenData = await tokenRes.json();
         if (!tokenData.access_token) throw new Error('No access token from Discord');
 
+        // Get user info
         const userRes = await fetch('https://discord.com/api/users/@me', {
             headers: { Authorization: `Bearer ${tokenData.access_token}` }
         });
         const user = await userRes.json();
 
+        // Get account age in days
         const snowflake = BigInt(user.id);
         const createdAt = new Date(Number((snowflake >> 22n) + 1420070400000n));
         const ageDays = Math.floor((Date.now() - createdAt.getTime()) / (1000 * 60 * 60 * 24));
 
+        // Save to session
         req.session.discordUser = {
             id:        user.id,
             username:  user.username,
@@ -103,6 +115,7 @@ app.get('/auth/discord/callback', async (req, res) => {
             ageDays
         };
 
+        // Redirect back to frontend
         res.redirect(CONFIG.FRONTEND_URL + '?discord=connected');
 
     } catch (e) {
@@ -111,27 +124,26 @@ app.get('/auth/discord/callback', async (req, res) => {
     }
 });
 
-// Get Discord session
+// ============================================================
+// GET DISCORD SESSION — website calls this to check if logged in
+// ============================================================
 app.get('/auth/me', (req, res) => {
     if (req.session.discordUser) {
-        res.json({ discord: req.session.discordUser });
+        res.json({ user: req.session.discordUser });
     } else {
-        res.json({ discord: null });
+        res.json({ user: null });
     }
 });
 
-// Logout
-app.post('/auth/logout', (req, res) => {
-    req.session.destroy();
-    res.json({ success: true });
-});
-
-// Scan only
+// ============================================================
+// SCAN ONLY — no Discord, just scan Roblox profile
+// ============================================================
 app.post('/scan/roblox', async (req, res) => {
     const { robloxId } = req.body;
     if (!robloxId || !/^\d+$/.test(robloxId)) {
         return res.status(400).json({ error: 'Invalid Roblox ID' });
     }
+
     try {
         const data = await fetchRobloxData(robloxId);
         res.json({ data, roleAssigned: false });
@@ -141,7 +153,9 @@ app.post('/scan/roblox', async (req, res) => {
     }
 });
 
-// Verify with Discord
+// ============================================================
+// VERIFY — Discord connected, assign role after scan
+// ============================================================
 app.post('/verify/roblox', async (req, res) => {
     const { robloxId } = req.body;
 
@@ -156,10 +170,12 @@ app.post('/verify/roblox', async (req, res) => {
     try {
         const data = await fetchRobloxData(robloxId);
 
+        // Block banned accounts
         if (data.user && data.user.isBanned) {
             return res.status(403).json({ error: 'Banned Roblox account cannot be verified' });
         }
 
+        // Ping the Discord bot to assign the verified role
         let roleAssigned = false;
         if (CONFIG.BOT_WEBHOOK_URL && CONFIG.GUILD_ID) {
             try {
@@ -174,8 +190,10 @@ app.post('/verify/roblox', async (req, res) => {
                 });
                 const botData = await botRes.json();
                 roleAssigned = botData.success === true;
+                console.log(`[Verify] Role assign result for ${req.session.discordUser.username}:`, botData);
             } catch (e) {
                 console.error('[Bot Webhook Error]', e.message);
+                // Don't fail the whole verify if bot ping fails
             }
         }
 
@@ -187,7 +205,9 @@ app.post('/verify/roblox', async (req, res) => {
     }
 });
 
-// Roblox data fetcher
+// ============================================================
+// ROBLOX DATA FETCHER
+// ============================================================
 async function fetchRobloxData(robloxId) {
     const [userRes, badgesRes, groupsRes, inventoryRes] = await Promise.allSettled([
         fetch(`https://users.roblox.com/v1/users/${robloxId}`),
@@ -205,6 +225,7 @@ async function fetchRobloxData(robloxId) {
     const groups    = groupsRes.status    === 'fulfilled' ? (await groupsRes.value.json()).data    || [] : [];
     const inventory = inventoryRes.status === 'fulfilled' ? (await inventoryRes.value.json()).data || [] : [];
 
+    // Get avatar
     let avatarUrl = null;
     try {
         const avatarRes = await fetch(`https://thumbnails.roblox.com/v1/users/avatar-headshot?userIds=${robloxId}&size=150x150&format=Png`);
@@ -227,6 +248,10 @@ async function fetchRobloxData(robloxId) {
     };
 }
 
+// ============================================================
+// START
+// ============================================================
 app.listen(PORT, () => {
     console.log(`🥓 BaconProtect Backend running on port ${PORT}`);
 });
+                        
