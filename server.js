@@ -13,7 +13,7 @@ const CONFIG = {
     // Discord OAuth
     DISCORD_CLIENT_ID:     process.env.DISCORD_CLIENT_ID,
     DISCORD_CLIENT_SECRET: process.env.DISCORD_CLIENT_SECRET,
-    DISCORD_REDIRECT_URI:  process.env.DISCORD_REDIRECT_URI, // e.g. https://yourbackend.railway.app/auth/discord/callback
+    DISCORD_REDIRECT_URI: process.env.DISCORD_REDIRECT_URI || 'https://respiratory-discord-baconprotect-backend1.onrender.com/auth/discord/callback',
 
     // Your bot webhook (from cloudflared tunnel on Termux)
     BOT_WEBHOOK_URL:       process.env.BOT_WEBHOOK_URL,      // e.g. https://random.trycloudflare.com/verified
